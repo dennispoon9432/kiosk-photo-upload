@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex">
+  <title>Upload Photo</title>
+  <style>
+    :root {
+      --bg: #0d0f14; --panel: #171b24; --panel-2: #222836;
+      --text: #f4f6fa; --muted: #8b93a7; --accent: #ff5a1f; --accent-2: #ffb020;
+      --ok: #2ecc71; --danger: #e74c3c;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text);
+      font-family: -apple-system, "Segoe UI", "PingFang HK", "Microsoft JhengHei", Arial, sans-serif; }
+    main { max-width: 480px; margin: 0 auto; padding: 32px 16px 48px; display: flex; flex-direction: column; gap: 20px; }
+    h1 { font-size: 26px; margin: 0; }
+    .zh { display: block; font-size: .85em; color: var(--muted); font-weight: 500; margin-top: 2px; }
+    p { margin: 0; line-height: 1.5; }
+    .muted { color: var(--muted); }
+    .preview { width: 100%; aspect-ratio: 4 / 3; border-radius: 18px; background: var(--panel);
+      display: flex; align-items: center; justify-content: center; overflow: hidden; color: var(--muted); }
+    .preview img { width: 100%; height: 100%; object-fit: contain; }
+    .btn { font: inherit; font-size: 18px; font-weight: 700; border: 0; border-radius: 16px; padding: 18px;
+      width: 100%; color: var(--text); background: var(--panel-2); cursor: pointer; }
+    .btn.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #111; }
+    .btn:disabled { opacity: .4; }
+    .bar { height: 10px; border-radius: 5px; background: var(--panel-2); overflow: hidden; }
+    .bar > div { height: 100%; width: 0; background: var(--accent-2); transition: width .2s; }
+    .msg { padding: 14px 16px; border-radius: 14px; background: var(--panel); }
+    .msg.error { background: rgba(231, 76, 60, .18); color: #ffb4ab; }
+    .big-icon { width: 96px; height: 96px; border-radius: 50%; margin: 24px auto 0; display: flex;
+      align-items: center; justify-content: center; font-size: 56px; background: var(--ok); color: #fff; }
+    .big-icon.error { background: var(--danger); }
+    .center { text-align: center; }
+    .hidden { display: none !important; }
+    input[type=file] { display: none; }
+  </style>
+</head>
+<body>
+<main>
+
+  <!-- Choose + upload -->
+  <section id="view-pick" class="hidden">
+    <h1>Upload your photo<span class="zh">上載你的相片</span></h1>
+    <p class="muted" style="margin:10px 0 18px">Choose a photo, then press Upload. <span class="zh">選擇相片，然後按「上載」。</span></p>
+    <div class="preview" id="preview">No photo yet · 未選擇相片</div>
+    <div style="height:16px"></div>
+    <label class="btn" id="pick-label" for="file" style="display:block;text-align:center">Choose photo · 選擇相片</label>
+    <input type="file" id="file" accept="image/*">
+    <div style="height:12px"></div>
+    <button class="btn primary" id="upload" disabled>Upload · 上載</button>
+    <div style="height:16px"></div>
+    <div class="bar hidden" id="bar"><div></div></div>
+    <div class="msg error hidden" id="pick-error"></div>
+  </section>
+
+  <!-- Done -->
+  <section id="view-done" class="hidden center">
+    <div class="big-icon">✓</div>
+    <h1 style="margin-top:20px">Done!<span class="zh">完成！</span></h1>
+    <p class="muted" style="margin-top:10px">Please continue on the kiosk screen. <span class="zh">請返回 Kiosk 螢幕繼續。</span></p>
+  </section>
+
+  <!-- Expired / bad link -->
+  <section id="view-expired" class="hidden center">
+    <div class="big-icon error">!</div>
+    <h1 style="margin-top:20px">This link has expired<span class="zh">此連結已失效</span></h1>
+    <p class="muted" style="margin-top:10px">Please scan the new QR code on the kiosk. <span class="zh">請重新掃描 Kiosk 上的 QR Code。</span></p>
+  </section>
+
+  <section id="view-loading" class="center"><p class="muted">Loading… 載入中…</p></section>
+
+</main>
+
+<script>
+  // ↓↓↓ Paste your Apps Script web app address here (ends with /exec) ↓↓↓
+  const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxuUQAb1tSAWwT2lgLql9Y-gNwVRbyZN8EWmNshd_DEU_Af_PbvRlZWo5bBBATZMeHsfw/exec';
+
+  const MAX_SIDE = 1600;     // resize the photo so the longest side is at most this
+  const JPEG_QUALITY = 0.85;
+
+  const session = new URLSearchParams(location.search).get('s') || '';
+  const $ = (id) => document.getElementById(id);
+  let jpegDataUrl = null;
+
+  function show(view) {
+    for (const v of ['pick', 'done', 'expired', 'loading']) $('view-' + v).classList.toggle('hidden', v !== view);
+  }
+
+  function showError(text) {
+    $('pick-error').textContent = text;
+    $('pick-error').classList.remove('hidden');
+  }
+
+  // Check the link is still open before letting the customer pick a photo.
+  async function start() {
+    if (!/^[0-9a-f]{32}$/.test(session)) return show('expired');
+    try {
+      const res = await fetch(SCRIPT_URL + '?action=status&s=' + session);
+      const data = await res.json();
+      if (data.state === 'waiting') return show('pick');
+      if (data.state === 'uploaded') return show('done');
+      return show('expired');
+    } catch (err) {
+      show('pick'); // network hiccup: let them try anyway, upload will report the real error
+    }
+  }
+
+  // Shrink to MAX_SIDE and convert to JPEG (also turns iPhone HEIC into JPEG and applies rotation).
+  function toJpeg(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.naturalWidth * scale);
+        canvas.height = Math.round(img.naturalHeight * scale);
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+        resolve(canvas.toDataURL('image/jpeg', JPEG_QUALITY));
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('bad image')); };
+      img.src = url;
+    });
+  }
+
+  $('file').addEventListener('change', async () => {
+    const file = $('file').files[0];
+    if (!file) return;
+    $('pick-error').classList.add('hidden');
+    $('upload').disabled = true;
+    try {
+      jpegDataUrl = await toJpeg(file);
+      $('preview').innerHTML = '';
+      const img = new Image();
+      img.src = jpegDataUrl;
+      $('preview').appendChild(img);
+      $('pick-label').textContent = 'Choose another · 重新選擇';
+      $('upload').disabled = false;
+    } catch {
+      jpegDataUrl = null;
+      showError('This file can\'t be opened. Please choose another photo. 無法開啟此檔案，請選擇另一張相片。');
+    }
+  });
+
+  $('upload').addEventListener('click', () => {
+    if (!jpegDataUrl) return;
+    $('upload').disabled = true;
+    $('pick-label').classList.add('hidden');
+    $('pick-error').classList.add('hidden');
+    $('bar').classList.remove('hidden');
+
+    // XHR instead of fetch so we can show upload progress. Plain-text body = no CORS preflight.
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', SCRIPT_URL);
+    xhr.setRequestHeader('Content-Type', 'text/plain;charset=utf-8');
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) $('bar').firstElementChild.style.width = Math.round((e.loaded / e.total) * 90) + '%';
+    };
+    const fail = (text) => {
+      $('bar').classList.add('hidden');
+      $('pick-label').classList.remove('hidden');
+      $('upload').disabled = false;
+      showError(text);
+    };
+    xhr.onload = () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch {}
+      if (data.ok) { $('bar').firstElementChild.style.width = '100%'; return show('done'); }
+      if (data.error === 'expired') return show('expired');
+      if (data.error === 'already-uploaded') return show('done');
+      fail('Upload failed, please try again. 上載失敗，請再試一次。');
+    };
+    xhr.onerror = () => fail('No connection, please try again. 網絡連線失敗，請再試一次。');
+    xhr.send(JSON.stringify({ s: session, image: jpegDataUrl }));
+  });
+
+  start();
+</script>
+</body>
+</html>
