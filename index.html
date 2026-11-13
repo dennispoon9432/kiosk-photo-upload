@@ -153,29 +153,32 @@
     $('pick-error').classList.add('hidden');
     $('bar').classList.remove('hidden');
 
-    // XHR instead of fetch so we can show upload progress. Plain-text body = no CORS preflight.
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', SCRIPT_URL);
-    xhr.setRequestHeader('Content-Type', 'text/plain;charset=utf-8');
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) $('bar').firstElementChild.style.width = Math.round((e.loaded / e.total) * 90) + '%';
-    };
+    // Must be a "simple" request (plain-text body, no custom headers, no upload-progress
+    // listener), otherwise the browser sends a CORS preflight that Apps Script can't answer.
+    // So the bar just creeps forward instead of showing real progress.
+    const fill = $('bar').firstElementChild;
+    let pct = 5;
+    fill.style.width = pct + '%';
+    const timer = setInterval(() => { pct += (90 - pct) * 0.08; fill.style.width = pct + '%'; }, 200);
+
     const fail = (text) => {
+      clearInterval(timer);
       $('bar').classList.add('hidden');
       $('pick-label').classList.remove('hidden');
       $('upload').disabled = false;
       showError(text);
     };
-    xhr.onload = () => {
-      let data = {};
-      try { data = JSON.parse(xhr.responseText); } catch {}
-      if (data.ok) { $('bar').firstElementChild.style.width = '100%'; return show('done'); }
-      if (data.error === 'expired') return show('expired');
-      if (data.error === 'already-uploaded') return show('done');
-      fail('Upload failed, please try again. 上載失敗，請再試一次。');
-    };
-    xhr.onerror = () => fail('No connection, please try again. 網絡連線失敗，請再試一次。');
-    xhr.send(JSON.stringify({ s: session, image: jpegDataUrl }));
+
+    fetch(SCRIPT_URL, { method: 'POST', body: JSON.stringify({ s: session, image: jpegDataUrl }) })
+      .then((res) => res.json())
+      .then((data) => {
+        clearInterval(timer);
+        if (data.ok) { fill.style.width = '100%'; return show('done'); }
+        if (data.error === 'expired') return show('expired');
+        if (data.error === 'already-uploaded') return show('done');
+        fail('Upload failed, please try again. 上載失敗，請再試一次。');
+      })
+      .catch(() => fail('No connection, please try again. 網絡連線失敗，請再試一次。'));
   });
 
   start();
